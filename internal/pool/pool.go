@@ -62,16 +62,8 @@ type Options struct {
 	IdleCheckFrequency time.Duration
 }
 
-type lastDialErrorWrap struct {
-	err error
-}
-
 type ConnPool struct {
 	opt *Options
-
-	dialErrorsNum uint32 // atomic
-
-	lastDialError atomic.Value
 
 	queue chan struct{}
 
@@ -172,16 +164,9 @@ func (p *ConnPool) dialConn(ctx context.Context, pooled bool) (*Conn, error) {
 		return nil, ErrClosed
 	}
 
-	if atomic.LoadUint32(&p.dialErrorsNum) >= uint32(p.opt.PoolSize) {
-		return nil, p.getLastDialError()
-	}
-
 	netConn, err := p.opt.Dialer(ctx)
+
 	if err != nil {
-		p.setLastDialError(err)
-		if atomic.AddUint32(&p.dialErrorsNum, 1) == uint32(p.opt.PoolSize) {
-			go p.tryDial()
-		}
 		return nil, err
 	}
 
@@ -189,37 +174,6 @@ func (p *ConnPool) dialConn(ctx context.Context, pooled bool) (*Conn, error) {
 	cn := NewConn(netConn)
 	cn.pooled = pooled
 	return cn, nil
-}
-
-func (p *ConnPool) tryDial() {
-	for {
-		if p.closed() {
-			return
-		}
-
-		conn, err := p.opt.Dialer(context.Background())
-		if err != nil {
-			p.setLastDialError(err)
-			time.Sleep(time.Second)
-			continue
-		}
-
-		atomic.StoreUint32(&p.dialErrorsNum, 0)
-		_ = conn.Close()
-		return
-	}
-}
-
-func (p *ConnPool) setLastDialError(err error) {
-	p.lastDialError.Store(&lastDialErrorWrap{err: err})
-}
-
-func (p *ConnPool) getLastDialError() error {
-	err, _ := p.lastDialError.Load().(*lastDialErrorWrap)
-	if err != nil {
-		return err.err
-	}
-	return nil
 }
 
 // Get returns existed connection from the pool or creates a new one.

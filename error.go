@@ -2,8 +2,10 @@ package redis
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/go-redis/redis/v8/internal/pool"
@@ -69,20 +71,32 @@ func isBadConn(err error, allowTimeout bool) bool {
 	case nil:
 		return false
 	case context.Canceled, context.DeadlineExceeded:
+		fmt.Fprintf(os.Stderr, "Bad connection (cancelled): %s\n", err)
 		return true
 	}
 
 	if isRedisError(err) {
 		// Close connections in read only state in case domain addr is used
 		// and domain resolves to a different Redis Server. See #790.
-		return isReadOnlyError(err)
+		if isReadOnlyError(err) {
+			fmt.Fprintf(os.Stderr, "Bad connection (ro): %s\n", err)
+			return true
+		}
+		return false
 	}
 
 	if allowTimeout {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			return !netErr.Temporary()
+			if !netErr.Temporary() {
+				fmt.Fprintf(os.Stderr, "Bad connection (netErr): %s\n", netErr)
+				return true
+			} else {
+				return false
+			}
 		}
 	}
+
+	fmt.Fprintf(os.Stderr, "Bad connection: %s\n", err)
 
 	return true
 }
